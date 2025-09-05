@@ -92,25 +92,36 @@ function CapturePage() {
   };
 
   // --- Analysis Logic ---
+// --- Analysis Logic ---
   const handleAnalyze = async () => {
+    if (!videoBlob) return;
+
     setIsAnalyzing(true);
     
-    // Simulate analysis processing
-    await new Promise(resolve => setTimeout(resolve, 3000));
-    
-    const fakeResult = {
-      decision: Math.random() > 0.5 ? 'Deception Indicated' : 'Truth Indicated',
-      confidence: Math.random() * 0.3 + 0.7, // 70-100%
-      reason: 'Vocal stress patterns and micro-expression analysis completed.',
-      details: {
-        vocalStress: Math.random() * 0.4 + 0.6,
-        microExpressions: Math.random() * 0.4 + 0.5,
-        bodyLanguage: Math.random() * 0.4 + 0.6
-      }
-    };
-    
-    setIsAnalyzing(false);
-    navigate('/results', { state: { result: fakeResult } });
+    const formData = new FormData();
+    formData.append('video', videoBlob, 'recording.webm');
+
+    // This is the URL for your Django backend
+const API_ENDPOINT = 'http://127.0.0.1:8000/api/analyze/';
+    try {
+        const response = await fetch(API_ENDPOINT, {
+            method: 'POST',
+            body: formData,
+        });
+
+        if (!response.ok) {
+            throw new Error('Network response was not ok');
+        }
+
+        const result = await response.json();
+        navigate('/results', { state: { result: result } });
+
+    } catch (error) {
+        console.error("Error analyzing video:", error);
+        alert("There was an error sending the video for analysis. Please make sure your backend server is running.");
+    } finally {
+        setIsAnalyzing(false);
+    }
   };
 
   const formatDuration = (seconds) => {

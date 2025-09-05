@@ -1,0 +1,17 @@
+{ 
+  "python.defaultInterpreterPath": "F:/Mini Project/Smart-Lie-Detector/backend/venv/Scripts/python.exe",  
+  "python.analysis.extraPaths": [
+    "./backend/venv/Lib/site-packages"
+  ],
+  "python.analysis.indexing": true,
+  "python.analysis.typeCheckingMode": "basic",
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "none",
+        "reportFunctionMemberAccess": "none"
+
+  },
+  "python.analysis.packageIndexDepths": [
+    { "name": "tensorflow", "depth": 0 }
+  ],
+  
+}

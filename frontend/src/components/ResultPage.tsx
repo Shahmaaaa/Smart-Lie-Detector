@@ -62,14 +62,14 @@ function ResultsPage() {
                   <Mic className="w-5 h-5 text-blue-400" />
                   <span className="text-slate-400">Vocal Analysis (Truth Probability)</span>
                 </div>
-                <span className="font-semibold text-white text-lg">{result.details.vocalTruthProbability}</span>
+                <span className="font-semibold text-white text-lg">{result.details.vocalEnsembleTruthProbability}</span>
               </div>
               <div className="flex justify-between items-center bg-slate-900/50 p-4 rounded-lg">
                 <div className="flex items-center space-x-3">
                   <Video className="w-5 h-5 text-purple-400" />
                   <span className="text-slate-400">Facial Analysis (Truth Probability)</span>
                 </div>
-                <span className="font-semibold text-white text-lg">{result.details.facialTruthProbability}</span>
+                <span className="font-semibold text-white text-lg">{result.details.facialAverageTruthProbability}</span>
               </div>
             </div>
           </div>

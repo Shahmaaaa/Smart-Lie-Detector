@@ -11,32 +11,22 @@ from keras.models import load_model
 import librosa
 from transformers import Wav2Vec2Processor, Wav2Vec2ForSequenceClassification
 import torch
-import cv2.data
 import torch.nn.functional as F
 from collections import Counter
 
 # Correct and Cleaned Imports for Keras Applications
 from tensorflow.keras.applications.vgg16 import VGG16, preprocess_input as vgg16_preprocess
-from tensorflow.keras.applications.resnet50 import ResNet50, preprocess_input as resnet50_preprocess
-from tensorflow.keras.applications.inception_v3 import InceptionV3, preprocess_input as inception_preprocess
+from tensorflow.keras.applications.resnet50 import preprocess_input as resnet50_preprocess
+from tensorflow.keras.applications.inception_v3 import preprocess_input as inception_preprocess
 
-# --- 1. GLOBAL FEATURE EXTRACTOR DEFINITION ---
+# --- 1. GLOBAL FEATURE EXTRACTOR DEFINITION (Only VGG16 is needed) ---
 VGG_INPUT_SHAPE = (224, 224, 3)
 RESNET_INPUT_SHAPE = (224, 224, 3)
-INCEPTION_INPUT_SHAPE = (224, 224, 3)
+INCEPTION_INPUT_SHAPE = (224, 224, 3)  # FIXED: Match expected shape from error log
 
-# Feature Extractors for Transfer Learning (Only VGG16 will use this as a standalone extractor)
+# VGG16 Feature Extractor (KEEP THIS ONE - used by facial_model_vgg/face.keras)
 VGG_FEATURE_EXTRACTOR = VGG16(weights="imagenet", include_top=False, input_shape=VGG_INPUT_SHAPE)
 VGG_FEATURE_EXTRACTOR.trainable = False 
-
-# NOTE: ResNet50 and InceptionV3 base models are defined here but NOT used as separate
-# extractors because the loaded .keras files contain the full base+top architecture.
-# We keep these lines here for robust initialization, although they aren't used in prediction.
-RESNET_BASE_MODEL = ResNet50(weights="imagenet", include_top=False, input_shape=RESNET_INPUT_SHAPE)
-RESNET_BASE_MODEL.trainable = False 
-INCEPTION_BASE_MODEL = InceptionV3(weights="imagenet", include_top=False, input_shape=INCEPTION_INPUT_SHAPE)
-INCEPTION_BASE_MODEL.trainable = False 
-
 
 # --- 2. Model Initialization ---
 MODELS_DIR = os.path.join(settings.BASE_DIR, 'models')
@@ -63,7 +53,6 @@ try:
     vocal_model_cnn = load_model(os.path.join(MODELS_DIR, "deception_cnn_model_augmented.h5"))
     
     # --- Load Facial Models ---
-    # NOTE: These files must contain the full base+top model for ResNet/Inception
     facial_model_vgg = load_model(os.path.join(MODELS_DIR, "face.keras"))
     facial_model_resnet = load_model(os.path.join(MODELS_DIR, "resnet50.keras"))
     facial_model_inception = load_model(os.path.join(MODELS_DIR, "inception.keras"))
@@ -166,19 +155,18 @@ def extract_cnn_spectrogram_features(audio_path, sr=16000, n_mels=128, max_len=5
 def predict_wav2vec2(audio_path):
     """Predict deception probability using the Wav2Vec2 model."""
     if not load_wav2vec2_once():
-        # Fallback to neutral if model fails to load
         return {'prob': 0.5, 'class': 1} 
     
     try:
         y, sr = librosa.load(audio_path, sr=16000) 
-        print(f"Audio length: {len(y)} samples")  
+        print(f"Audio length: {len(y)} samples")  # Debug audio length
         if len(y) == 0:
             print("Empty audio - skipping Wav2Vec2")
             return {'prob': 0.5, 'class': 1}
         
-        MAX_SAMPLES = 160000 
+        MAX_SAMPLES = 160000  # Increased
         if len(y) > MAX_SAMPLES:
-            y = y[:MAX_SAMPLES] 
+            y = y[:MAX_SAMPLES]  # Truncate
         
         if WAV2VEC2_PROCESSOR is None or WAV2VEC2_MODEL is None:
             raise RuntimeError("Wav2Vec2 processor or model failed to load.")
@@ -203,7 +191,6 @@ def predict_wav2vec2(audio_path):
         
     except Exception as e:
         print(f"Error predicting with Wav2Vec2 (check audio format/codec): {e}")
-        # Wav2Vec2 frequently fails if audio is corrupt, return neutral
         return {'prob': 0.5, 'class': 1} 
 
 # ----------------------------------------------------------------------
@@ -211,61 +198,15 @@ def predict_wav2vec2(audio_path):
 # ----------------------------------------------------------------------
 
 def extract_frame(video_path):
-    """Extract a frame from the video by trying multiple positions and detects/crops face."""
+    """Extract ONE raw frame (no resize yet)."""
     try:
-        # ... (Frame extraction and face detection/cropping logic remains the same) ...
         cap = cv2.VideoCapture(video_path)
-        if not cap.isOpened():
-            print("Failed to open video file.")
-            return None
-        
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        if total_frames == 0:
-            print("Video has no frames.")
-            cap.release()
-            return None
-        
-        attempt_positions = [total_frames // 2, 0, total_frames - 1] + list(range(0, min(10, total_frames)))
-        
-        ret = False
-        frame = None
-        for pos in attempt_positions:
-            if pos < 0 or pos >= total_frames:
-                continue
-            cap.set(cv2.CAP_PROP_POS_FRAMES, pos)
-            ret, frame = cap.read()
-            if ret:
-                break
-        
+        ret, frame = cap.read()
         cap.release()
-        
-        if not ret or frame is None:
-            print("Failed to read any frame from video after multiple attempts.")
+        if not ret:
             return None
         
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        
-        # Face detection and cropping
-        face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
-        
-        if len(faces) > 0:
-            faces = sorted(faces, key=lambda x: x[2] * x[3], reverse=True)
-            x, y, w, h = faces[0]
-            # Add padding for context
-            pad_w = int(0.1 * w)
-            pad_h = int(0.1 * h)
-            x = max(0, x - pad_w)
-            y = max(0, y - pad_h)
-            w = min(frame.shape[1] - x, w + 2 * pad_w)
-            h = min(frame.shape[0] - y, h + 2 * pad_h)
-            
-            frame = frame[y:y+h, x:x+w]
-            print(f"Face detected and cropped: {w}x{h}")
-        else:
-            print("No face detected in the frame.")
-        
         return frame.astype(np.float32)
         
     except Exception as e:
@@ -273,80 +214,50 @@ def extract_frame(video_path):
         return None
 
 def get_facial_prediction(model, frame, preprocess_func, model_name, input_shape):
-    """
-    Utility function to resize, preprocess, and predict for one facial model.
-    FIXED: ResNet/Inception now receive the preprocessed image directly.
-    FIXED: Robust probability extraction to prevent crash (prediction[0][0] vs. prediction.flatten()[0]).
-    """
+    """Utility function to resize, preprocess, predict for one facial model."""
     
-    global VGG_FEATURE_EXTRACTOR,FACIAL_TRUTH_THRESHOLD
-    # Define a high threshold for predicting 'Truth' (1) to counter bias
+    global VGG_FEATURE_EXTRACTOR 
     
     if model is None or frame is None:
         return {'prob': 0.5, 'class': 1}
 
     try:
-        # 1. Resize and Preprocess Image
         # Resize to model-specific shape
         resized_frame = cv2.resize(frame, input_shape[:2])
         
-        # Add batch dimension and run Keras preprocessing: (1, 224, 224, 3)
+        # Add batch dimension and run Keras preprocessing
         preprocessed_image = preprocess_func(np.expand_dims(resized_frame, axis=0))
 
-        # --- PREDICTION LOGIC ---
+        # Normalization
+        
+        # --- Conditional Input Data Flow ---
         if model_name == 'VGG16':
-            # VGG16: Use the base model to extract features (input to the custom classifier)
+            # VGG16 uses features
             features = VGG_FEATURE_EXTRACTOR.predict(preprocessed_image, verbose=0)
-            # Flatten the features for the VGG classifier model, which expects a 1D vector
-            if np.max(features) > 0:
-                 features = features / np.max(features)
-            input_data_for_classifier = features.flatten().reshape(1, -1)
-        
+            input_data = features.flatten().reshape(1, -1)
+            
         elif model_name in ['ResNet50', 'Inception']:
-            # ResNet/Inception: The custom .keras file expects the FULL image input (4D tensor).
-            preprocessed_image = preprocess_func(np.expand_dims(resized_frame, axis=0))
+            # ResNet50/Inception expect the preprocessed/normalized IMAGE
+            input_data = preprocessed_image
             
-            # 2. Instead, use a simple 0-1 scaling for the input:
-            input_data_for_classifier = np.expand_dims(resized_frame, axis=0) / 255.0 
-            
-        
         else:
             raise ValueError(f"Unknown facial model name: {model_name}")
         
-        # 2. Predict using the custom classifier model
-        prediction = model.predict(input_data_for_classifier, verbose=0)
+        # Predict using the model
+        prediction = model.predict(input_data, verbose=0)
         
-        # --- ROBUST PROBABILITY EXTRACTION FIX ---
-        # Ensure prediction is flattened to a single scalar probability value.
-        if prediction.ndim > 1:
-            prob = prediction.flatten()[0]
-        else:
-            # Assumes prediction is a 1D array like [0.0000]
-            prob = prediction[0] 
-        
-        # 3. Apply Adjusted Threshold
-        # NOTE: Model prediction is typically a probability of class 1 (Truth/Positive)
-        # Apply the adjusted threshold to counter the bias toward class 0 (Deception)
-        cls = 1 if prob >= FACIAL_TRUTH_THRESHOLD else 0
+        prob = prediction[0][0] 
+        cls = 1 if prob >= 0.5 else 0
         
         return {'prob': float(prob), 'class': cls}
         
     except Exception as e:
         print(f"Error predicting with {model_name}: {e}")
-        # Default to neutral if prediction fails
         return {'prob': 0.5, 'class': 1}
 
 # ----------------------------------------------------------------------
 # --- 5. The API View ---
 # ----------------------------------------------------------------------
-
-# --- GLOBAL ENSEMBLE WEIGHTS ---
-# Adjust weights to prioritize facial models if vocal models are strongly biased (e.g., 60% facial, 40% vocal)
-WEIGHT_FACIAL = 0.6
-WEIGHT_VOCAL = 1.0 - WEIGHT_FACIAL
-# Adjusted CNN Threshold to match facial models
-CNN_TRUTH_THRESHOLD = 0.65 
-FACIAL_TRUTH_THRESHOLD = 0.05
 class AnalyzeVideoView(APIView):
 
     def post(self, request, *args, **kwargs):
@@ -357,7 +268,6 @@ class AnalyzeVideoView(APIView):
             'cnn': {'prob': 0.5, 'class': 1}, 
             'vgg': {'prob': 0.5, 'class': 1},
             'resnet': {'prob': 0.5, 'class': 1},
-            'inception': {'prob': 0.5, 'class': 1},
         }
         
         temp_video_path = "temp_video_upload.mp4"
@@ -383,9 +293,8 @@ class AnalyzeVideoView(APIView):
             # XGBoost Prediction
             if vocal_model_xgb and vocal_scaler_xgb and vocal_features_xgb is not None:
                 scaled_features = vocal_scaler_xgb.transform(vocal_features_xgb.reshape(1, -1))
-                results['xgb']['prob'] = float(vocal_model_xgb.predict_proba(scaled_features)[0][1])
-                # XGBoost class is derived from its own default 0.5 threshold
-                results['xgb']['class'] = int(vocal_model_xgb.predict(scaled_features)[0])
+                results['xgb']['prob'] = vocal_model_xgb.predict_proba(scaled_features)[0][1]
+                results['xgb']['class'] = vocal_model_xgb.predict(scaled_features)[0]
 
             # Wav2Vec2 Prediction
             if WAV2VEC2_MODEL and WAV2VEC2_PROCESSOR:
@@ -396,71 +305,59 @@ class AnalyzeVideoView(APIView):
                 try:
                     cnn_prob = vocal_model_cnn.predict(cnn_features, verbose=0)[0][0] 
                     results['cnn']['prob'] = float(cnn_prob)
-                    # Apply adjusted CNN Threshold
-                    results['cnn']['class'] = 1 if cnn_prob >= CNN_TRUTH_THRESHOLD else 0
+                    results['cnn']['class'] = 1 if cnn_prob >= 0.5 else 0
                 except Exception as e:
                     print(f"Vocal CNN model prediction failed: {e}")
             
             if temp_audio_path and os.path.exists(temp_audio_path):
                 os.remove(temp_audio_path)
 
-            # --- VOCAL ENSEMBLE (Hard Voting for Class, Soft for Prob) ---
+            # --- VOCAL ENSEMBLE (Soft Voting) ---
             vocal_probs = [results['xgb']['prob'], results['w2v2']['prob'], results['cnn']['prob']]
             final_vocal_prob = np.mean(vocal_probs)
-            vocal_classes = [results['xgb']['class'], results['w2v2']['class'], results['cnn']['class']]
-            final_vocal_class = Counter(vocal_classes).most_common(1)[0][0]
+            final_vocal_class = 1 if final_vocal_prob >= 0.5 else 0
 
-            # --- FACIAL ANALYSIS (Hard Voting for Class, Soft for Prob) ---
+            # --- FACIAL ANALYSIS (Weighted Average of VGG16 and ResNet50) ---
             raw_frame = extract_frame(temp_video_path)
-            if raw_frame is None:
-                print("Using default facial probabilities due to frame extraction failure.")
-            
-            # Note: The threshold logic is now inside get_facial_prediction
             results['vgg'] = get_facial_prediction(facial_model_vgg, raw_frame, vgg16_preprocess, 'VGG16', VGG_INPUT_SHAPE)
             results['resnet'] = get_facial_prediction(facial_model_resnet, raw_frame, resnet50_preprocess, 'ResNet50', RESNET_INPUT_SHAPE)
-            results['inception'] = get_facial_prediction(facial_model_inception, raw_frame, inception_preprocess, 'Inception', INCEPTION_INPUT_SHAPE)
 
-            facial_probs = [results['vgg']['prob'], results['resnet']['prob'], results['inception']['prob']]
-            final_facial_prob = np.mean(facial_probs)
-            facial_classes = [results['vgg']['class'], results['resnet']['class'], results['inception']['class']]
-            final_facial_class = Counter(facial_classes).most_common(1)[0][0]
+            final_facial_prob = 0.5 * results['vgg']['prob'] + 0.5 * results['resnet']['prob']
+            final_facial_class = 1 if final_facial_prob >= 0.5 else 0
 
             if os.path.exists(temp_video_path):
                 os.remove(temp_video_path)
 
-            # --- FINAL ENSEMBLE DECISION (Weighted Average) ---
-            
-            # Assuming Class 1 = Truth, Class 0 = Deception
-            
+            # --- FINAL ENSEMBLE (Weighted Average) ---
+           # --- ✅ FINAL ENSEMBLE DECISION (Improved Logic) ---
+
             if final_vocal_class == final_facial_class:
             # 🤝 AGREEMENT MODE
                 final_class = final_vocal_class
-                # Simple average of probabilities when they agree
                 final_truth_probability = (final_vocal_prob + final_facial_prob) / 2
+                decision = "Truth Indicated" if final_class == 1 else "Deception Indicated"
+                confidence = final_truth_probability if final_class == 1 else 1 - final_truth_probability
                 print("🤝 AGREEMENT MODE: Both Vocal & Facial models agree.")
             else:
-            # ⚖️ DISAGREEMENT MODE - use weighted average probability
-                final_truth_probability = (WEIGHT_VOCAL * final_vocal_prob) + (WEIGHT_FACIAL * final_facial_prob)
+            # ⚖️ DISAGREEMENT MODE - fallback to average probability
+                final_truth_probability = 0.5 * final_vocal_prob + 0.5 * final_facial_prob
                 final_class = 1 if final_truth_probability >= 0.5 else 0
-                print(f"⚖️ DISAGREEMENT MODE: Models disagree. Using weighted avg ({WEIGHT_FACIAL*100}% facial).")
-
-            # Final interpretation
-            decision = "Truth Indicated" if final_class == 1 else "Deception Indicated"
-            confidence = final_truth_probability if final_class == 1 else 1 - final_truth_probability
+                decision = "Truth Indicated" if final_class == 1 else "Deception Indicated"
+                confidence = final_truth_probability if final_class == 1 else 1 - final_truth_probability
+                print("⚖️ DISAGREEMENT MODE: Models disagree, using average probability fallback.")
 
             # --- PRINT EVERYTHING TO TERMINAL ---
             print("\n" + "="*60)
             print("🚀 VOCAL MODEL RESULTS 🚀")
             print(f"XGBoost (MFCC) -> Class: {results['xgb']['class']} | Prob: {results['xgb']['prob']:.4f}")
             print(f"Wav2Vec2      -> Class: {results['w2v2']['class']} | Prob: {results['w2v2']['prob']:.4f}")
-            print(f"Vocal CNN H5  -> Class: {results['cnn']['class']} | Prob: {results['cnn']['prob']:.4f} (Threshold: {CNN_TRUTH_THRESHOLD})")
+            print(f"Vocal CNN H5  -> Class: {results['cnn']['class']} | Prob: {results['cnn']['prob']:.4f}")
             print(f"VOCAL ENSEMBLE -> Class: {final_vocal_class} | Prob: {final_vocal_prob:.4f}")
             print("-"*60)
             print("👁️ FACIAL MODEL RESULTS 👁️")
-            print(f"VGG16     -> Class: {results['vgg']['class']} | Prob: {results['vgg']['prob']:.4f}")
-            print(f"ResNet50  -> Class: {results['resnet']['class']} | Prob: {results['resnet']['prob']:.4f}")
-            print(f"Inception -> Class: {results['inception']['class']} | Prob: {results['inception']['prob']:.4f}")
-            print(f"FACIAL ENSEMBLE -> Class: {final_facial_class} | Prob: {final_facial_prob:.4f} (Threshold: {FACIAL_TRUTH_THRESHOLD})")
+            print(f"VGG16   -> Prob: {results['vgg']['prob']:.4f}")
+            print(f"ResNet50-> Prob: {results['resnet']['prob']:.4f}")
+            print(f"FACIAL AVERAGE -> Class: {final_facial_class} | Prob: {final_facial_prob:.4f}")
             print("-"*60)
             print("🏁 FINAL ENSEMBLE DECISION 🏁")
             print(f"Decision: {decision} | Confidence: {confidence:.4f}")
@@ -480,9 +377,8 @@ class AnalyzeVideoView(APIView):
                         "Vocal_CNN_H5": f"Class {results['cnn']['class']} | Prob {results['cnn']['prob'] * 100:.2f}%",
                     },
                     "facialModelBreakdown": {
-                        "VGG16": f"Class {results['vgg']['class']} | Prob {results['vgg']['prob'] * 100:.2f}%",
-                        "ResNet50": f"Class {results['resnet']['class']} | Prob {results['resnet']['prob'] * 100:.2f}%",
-                        "Inception": f"Class {results['inception']['class']} | Prob {results['inception']['prob'] * 100:.2f}%",
+                        "VGG16": f"Prob {results['vgg']['prob'] * 100:.2f}%",
+                        "ResNet50": f"Prob {results['resnet']['prob'] * 100:.2f}%",
                     }
                 }
             }, status=status.HTTP_200_OK)
@@ -494,3 +390,4 @@ class AnalyzeVideoView(APIView):
                 os.remove(temp_audio_path)
             
             return Response({"error": f"Unexpected server error: {str(e)}"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
